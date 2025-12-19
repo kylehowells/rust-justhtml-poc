@@ -412,6 +412,115 @@ impl TreeBuilder {
     fn push_formatting_marker(&mut self) {
         self.active_formatting_elements.push(None);
     }
+
+    fn has_active_formatting_entry(&self, name: &str) -> bool {
+        for entry in self.active_formatting_elements.iter().rev() {
+            match entry {
+                None => return false, // Hit marker
+                Some(node) if node.name == name => return true,
+                _ => continue,
+            }
+        }
+        false
+    }
+
+    fn adoption_agency(&mut self, name: &str) {
+        // Step 1: If current node is the subject and not in active formatting, just pop it
+        if let Some(current) = self.current_node() {
+            if current.name == name && !self.has_active_formatting_entry(name) {
+                self.pop_elements_until(name);
+                return;
+            }
+        }
+
+        // Step 2: Outer loop (max 8 iterations)
+        for _ in 0..8 {
+            // Step 3: Find formatting element in active formatting list
+            let mut fe_active_idx: Option<usize> = None;
+            for i in (0..self.active_formatting_elements.len()).rev() {
+                match &self.active_formatting_elements[i] {
+                    None => break, // Hit marker
+                    Some(node) if node.name == name => {
+                        fe_active_idx = Some(i);
+                        break;
+                    }
+                    _ => continue,
+                }
+            }
+
+            let Some(fe_active_idx) = fe_active_idx else {
+                // No formatting element found - use any other end tag handling
+                self.any_other_end_tag(name);
+                return;
+            };
+
+            // Step 4: Find formatting element in open elements
+            let fe_stack_idx = self.open_elements.iter().rposition(|n| n.name == name);
+
+            let Some(fe_stack_idx) = fe_stack_idx else {
+                // Formatting element not in open elements - remove from active formatting
+                self.error("adoption-agency-1.3");
+                self.active_formatting_elements.remove(fe_active_idx);
+                return;
+            };
+
+            // Step 5: Check if formatting element is in scope
+            if !self.has_element_in_scope(name) {
+                self.error("adoption-agency-1.3");
+                return;
+            }
+
+            // Step 6: If formatting element is not current node, emit error
+            if fe_stack_idx != self.open_elements.len() - 1 {
+                self.error("adoption-agency-1.3");
+            }
+
+            // Step 7: Find furthest block (first special element after formatting element)
+            let mut furthest_block_idx: Option<usize> = None;
+            for i in (fe_stack_idx + 1)..self.open_elements.len() {
+                if SPECIAL_ELEMENTS.contains(self.open_elements[i].name.as_str()) {
+                    furthest_block_idx = Some(i);
+                    break;
+                }
+            }
+
+            // Step 8: If no furthest block, pop to formatting element and remove from active formatting
+            let Some(_fb_idx) = furthest_block_idx else {
+                while self.open_elements.len() > fe_stack_idx {
+                    self.pop_and_add_to_parent();
+                }
+                self.active_formatting_elements.remove(fe_active_idx);
+                return;
+            };
+
+            // For the complex case with furthest block, we use a simplified approach:
+            // Just pop elements and remove from active formatting.
+            // This doesn't produce perfect output for complex adoption agency cases,
+            // but handles the common cases.
+            self.generate_implied_end_tags();
+            while self.open_elements.len() > fe_stack_idx {
+                self.pop_and_add_to_parent();
+            }
+            self.active_formatting_elements.remove(fe_active_idx);
+            return;
+        }
+    }
+
+    fn any_other_end_tag(&mut self, name: &str) {
+        for i in (0..self.open_elements.len()).rev() {
+            if self.open_elements[i].name == name {
+                self.generate_implied_end_tags_except(Some(name));
+                while self.open_elements.len() > i {
+                    self.pop_and_add_to_parent();
+                }
+                break;
+            }
+            if SPECIAL_ELEMENTS.contains(self.open_elements[i].name.as_str()) {
+                self.error("unexpected-end-tag");
+                break;
+            }
+        }
+    }
 }
 
 impl TokenSink for TreeBuilder {
@@ -1753,15 +1862,7 @@ impl TreeBuilder {
             }
             "a" | "b" | "big" | "code" | "em" | "font" | "i" | "nobr" | "s" |
             "small" | "strike" | "strong" | "tt" | "u" => {
-                // Simplified adoption agency - just pop
-                if self.has_element_in_scope(name) {
-                    self.generate_implied_end_tags();
-                    self.pop_elements_until(name);
-                    // Remove from active formatting
-                    self.active_formatting_elements.retain(|e| {
-                        e.as_ref().map_or(true, |n| n.name != name)
-                    });
-                }
+                self.adoption_agency(name);
             }
             "applet" | "marquee" | "object" => {
                 if self.has_element_in_scope(name) {
@@ -1778,20 +1879,7 @@ impl TreeBuilder {
                 self.insert_element_for_token("br", HashMap::new(), true);
             }
             _ => {
-                // Any other end tag
-                for i in (0..self.open_elements.len()).rev() {
-                    if self.open_elements[i].name == name {
-                        self.generate_implied_end_tags_except(Some(name));
-                        while self.open_elements.len() > i {
-                            self.pop_and_add_to_parent();
-                        }
-                        break;
-                    }
-                    if SPECIAL_ELEMENTS.contains(self.open_elements[i].name.as_str()) {
-                        self.error("unexpected-end-tag");
-                        break;
-                    }
-                }
+                self.any_other_end_tag(name);
             }
         }
     }
