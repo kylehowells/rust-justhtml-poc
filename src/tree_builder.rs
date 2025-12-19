@@ -92,6 +92,9 @@ pub struct TreeBuilder {
     /// Pending table character tokens
     pending_table_chars: String,
 
+    /// Index where html element should be inserted in document
+    html_insert_index: usize,
+
     /// Errors
     pub errors: Vec<ParseError>,
 }
@@ -126,6 +129,7 @@ impl TreeBuilder {
             iframe_srcdoc,
             foster_parenting: false,
             pending_table_chars: String::new(),
+            html_insert_index: 0,
             errors: Vec::new(),
         };
 
@@ -180,7 +184,9 @@ impl TreeBuilder {
                     self.document.children.push(child);
                 }
             } else {
-                self.document.children.push(root);
+                // Insert html at the position recorded when we entered BeforeHtml
+                // This preserves the order: doctype, pre-html comments, html, post-html comments
+                self.document.children.insert(self.html_insert_index, root);
             }
         }
 
@@ -571,6 +577,8 @@ impl TreeBuilder {
                 self.process_start_tag(name, attrs, self_closing);
             }
             InsertionMode::BeforeHtml => {
+                // Record where html should be inserted (after any pre-html content)
+                self.html_insert_index = self.document.children.len();
                 if name == "html" {
                     self.insert_html_element(name, attrs);
                     self.insertion_mode = InsertionMode::BeforeHead;
@@ -1950,6 +1958,7 @@ impl TreeBuilder {
                 if c.is_ascii_whitespace() {
                     // Ignore
                 } else {
+                    self.html_insert_index = self.document.children.len();
                     self.insert_html_element("html", HashMap::new());
                     self.insertion_mode = InsertionMode::BeforeHead;
                     self.process_character(c);
@@ -2132,6 +2141,7 @@ impl TreeBuilder {
                 self.process_eof();
             }
             InsertionMode::BeforeHtml => {
+                self.html_insert_index = self.document.children.len();
                 self.insert_html_element("html", HashMap::new());
                 self.insertion_mode = InsertionMode::BeforeHead;
                 self.process_eof();
