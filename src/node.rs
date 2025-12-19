@@ -107,6 +107,9 @@ pub struct Node {
     /// Used for cases where elements need to be on the stack but are already parented
     #[doc(hidden)]
     pub is_parented: bool,
+    /// Flag to track if this element was inserted via foster parenting
+    #[doc(hidden)]
+    pub foster_parented: bool,
 }
 
 impl Node {
@@ -125,6 +128,7 @@ impl Node {
             data: None,
             template_content: None,
             is_parented: false,
+            foster_parented: false,
         }
     }
 
@@ -143,6 +147,7 @@ impl Node {
             data: None,
             template_content: None,
             is_parented: false,
+            foster_parented: false,
         }
     }
 
@@ -185,6 +190,7 @@ impl Node {
                 None
             },
             is_parented: false,
+            foster_parented: false,
         }
     }
 
@@ -201,6 +207,7 @@ impl Node {
                 None
             },
             is_parented: false,
+            foster_parented: false,
         }
     }
 
@@ -289,6 +296,7 @@ impl Node {
             data: self.data.clone(),
             template_content: self.template_content.as_ref().map(|t| Box::new(t.clone_deep())),
             is_parented: self.is_parented,
+            foster_parented: self.foster_parented,
         };
 
         for child in &self.children {
@@ -311,6 +319,7 @@ pub fn handle_to_node(handle: &Handle) -> Node {
         data: inner.data.clone(),
         template_content: None,
         is_parented: false,
+        foster_parented: false,
     };
 
     // Convert children

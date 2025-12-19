@@ -247,9 +247,16 @@ impl TreeBuilder {
     }
 
     fn insert_html_element(&mut self, name: &str, attrs: HashMap<String, String>) {
-        let element = Node::element(name, attrs);
+        let mut element = Node::element(name, attrs);
+
+        // Mark for foster parenting if currently in foster parent mode
+        if self.foster_parenting {
+            element.foster_parented = true;
+        }
+
         self.open_elements.push(element);
     }
+
 
     fn insert_character(&mut self, c: char) {
         // Skip leading newline after pre/listing/textarea
@@ -262,6 +269,25 @@ impl TreeBuilder {
 
         let text = c.to_string();
 
+        if self.foster_parenting {
+            // Find the foster parent location (before the table)
+            if let Some((parent_idx, table_child_idx)) = self.find_foster_parent_location() {
+                let parent = &mut self.open_elements[parent_idx];
+                // Try to append to existing text node before the table
+                if table_child_idx > 0 {
+                    if let Some(prev_child) = parent.children.get_mut(table_child_idx - 1) {
+                        if let Some(NodeData::Text(ref mut existing)) = prev_child.data {
+                            existing.push(c);
+                            return;
+                        }
+                    }
+                }
+                // Insert new text node before table
+                parent.children.insert(table_child_idx, Node::text(&text));
+            }
+            return;
+        }
+
         // Try to append to existing text node
         if let Some(current) = self.open_elements.last_mut() {
             if let Some(last_child) = current.children.last_mut() {
@@ -273,6 +299,25 @@ impl TreeBuilder {
             // Create new text node
             current.children.push(Node::text(&text));
         }
+    }
+
+    /// Find the foster parent location: returns (parent_index, child_index_of_table)
+    /// where we should insert before the table.
+    fn find_foster_parent_location(&self) -> Option<(usize, usize)> {
+        // Find the last table element in the stack
+        for i in (0..self.open_elements.len()).rev() {
+            if self.open_elements[i].name == "table" {
+                // The foster parent is the element before the table in the stack
+                if i > 0 {
+                    let parent_idx = i - 1;
+                    let parent = &self.open_elements[parent_idx];
+                    // Find where the table is in the parent's children
+                    // Since table might not be added yet, use children.len()
+                    return Some((parent_idx, parent.children.len()));
+                }
+            }
+        }
+        None
     }
 
     fn insert_comment(&mut self, data: &str) {
@@ -309,11 +354,21 @@ impl TreeBuilder {
     }
 
     fn pop_and_add_to_parent(&mut self) {
-        if let Some(node) = self.open_elements.pop() {
+        if let Some(mut node) = self.open_elements.pop() {
             // Skip adding to parent if already parented (e.g., elements inserted during head reinsertion)
             if node.is_parented {
                 return;
             }
+
+            // Handle foster parenting: insert before the table
+            if node.foster_parented {
+                node.foster_parented = false; // Clear the flag
+                if let Some((parent_idx, insert_idx)) = self.find_foster_parent_location() {
+                    self.open_elements[parent_idx].children.insert(insert_idx, node);
+                    return;
+                }
+            }
+
             if let Some(parent) = self.open_elements.last_mut() {
                 parent.children.push(node);
             } else {
@@ -2200,11 +2255,17 @@ impl TreeBuilder {
     }
 
     fn process_in_table_character(&mut self, c: char) {
-        if TABLE_CONTEXT_TAGS.contains(self.current_node().map_or("", |n| n.name.as_str())) {
+        let current = self.current_node();
+        let current_name = current.map_or("", |n| n.name.as_str());
+
+        if TABLE_CONTEXT_TAGS.contains(current_name) {
             self.pending_table_chars.clear();
             self.original_insertion_mode = self.insertion_mode;
             self.insertion_mode = InsertionMode::InTableText;
             self.process_character(c);
+        } else if current.map_or(false, |n| n.foster_parented) {
+            // We're inside a foster-parented element, process text normally
+            self.insert_character(c);
         } else {
             self.error("unexpected-character-in-table");
             self.foster_parent_character(c);
