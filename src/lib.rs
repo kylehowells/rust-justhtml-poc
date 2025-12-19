@@ -15,7 +15,7 @@ pub use node::{Doctype, Namespace, Node, NodeData};
 pub use tokens::{ParseError, Token};
 
 use tree_builder::TreeBuilder;
-use tokenizer::Tokenizer;
+use tokenizer::{Tokenizer, State as TokenizerState};
 
 /// Fragment parsing context
 #[derive(Debug, Clone)]
@@ -73,7 +73,21 @@ impl JustHTML {
             options.iframe_srcdoc,
         );
 
-        let mut tokenizer = Tokenizer::new(&mut tree_builder);
+        // Determine initial tokenizer state based on fragment context (per WHATWG spec)
+        let initial_state = if let Some(ref ctx) = options.fragment_context {
+            match ctx.tag_name.as_str() {
+                "title" | "textarea" => TokenizerState::Rcdata,
+                "style" | "xmp" | "iframe" | "noembed" | "noframes" => TokenizerState::Rawtext,
+                "script" => TokenizerState::ScriptData,
+                "noscript" if options.scripting => TokenizerState::Rawtext,
+                "plaintext" => TokenizerState::Plaintext,
+                _ => TokenizerState::Data,
+            }
+        } else {
+            TokenizerState::Data
+        };
+
+        let mut tokenizer = Tokenizer::with_options(&mut tree_builder, initial_state, options.scripting);
         tokenizer.run(html);
 
         let (root, errors) = tree_builder.finish();

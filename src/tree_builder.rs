@@ -141,12 +141,12 @@ impl TreeBuilder {
     }
 
     fn setup_fragment_context(&mut self, ctx: &FragmentContext) {
-        // Create a dummy HTML element
+        // Create a dummy HTML element as the root
         let html = Node::element("html", HashMap::new());
         self.open_elements.push(html);
 
         // Set initial insertion mode based on context
-        self.insertion_mode = match ctx.tag_name.as_str() {
+        let mode = match ctx.tag_name.as_str() {
             "title" | "textarea" => InsertionMode::Text,
             "style" | "xmp" | "iframe" | "noembed" | "noframes" => InsertionMode::Text,
             "script" => InsertionMode::Text,
@@ -168,6 +168,13 @@ impl TreeBuilder {
             "html" => InsertionMode::BeforeHead,
             _ => InsertionMode::InBody,
         };
+
+        self.insertion_mode = mode;
+        // For Text mode fragments, set original_insertion_mode to InBody
+        // so EOF doesn't trigger Initial mode processing
+        if mode == InsertionMode::Text {
+            self.original_insertion_mode = InsertionMode::InBody;
+        }
     }
 
     pub fn finish(mut self) -> (Node, Vec<ParseError>) {
@@ -2214,7 +2221,10 @@ impl TreeBuilder {
             }
             InsertionMode::Text => {
                 self.error("eof-in-text");
-                self.pop_and_add_to_parent();
+                // Don't pop the root element in fragment parsing
+                if !(self.fragment_context.is_some() && self.open_elements.len() == 1) {
+                    self.pop_and_add_to_parent();
+                }
                 self.insertion_mode = self.original_insertion_mode;
                 self.process_eof();
             }
