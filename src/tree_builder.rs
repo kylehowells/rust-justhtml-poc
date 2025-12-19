@@ -2229,7 +2229,12 @@ impl TreeBuilder {
                 self.process_eof();
             }
             InsertionMode::InTable | InsertionMode::InTableBody |
-            InsertionMode::InTableText | InsertionMode::InColumnGroup => {
+            InsertionMode::InColumnGroup => {
+                // Stop parsing
+            }
+            InsertionMode::InTableText => {
+                // Flush pending table text before stopping
+                self.flush_table_text();
                 // Stop parsing
             }
             InsertionMode::InSelect | InsertionMode::InSelectInTable => {
