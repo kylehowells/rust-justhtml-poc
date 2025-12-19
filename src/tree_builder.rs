@@ -1249,9 +1249,23 @@ impl TreeBuilder {
             }
             _ => {
                 self.reconstruct_active_formatting_elements();
-                self.insert_html_element(name, attrs);
+                // Use insert_element to inherit namespace from parent (for foreign content)
+                if self.is_in_foreign_content() {
+                    self.insert_element(name, attrs);
+                    if self_closing {
+                        self.pop_and_add_to_parent();
+                    }
+                } else {
+                    self.insert_html_element(name, attrs);
+                }
             }
         }
+    }
+
+    fn is_in_foreign_content(&self) -> bool {
+        self.current_node()
+            .and_then(|n| n.namespace)
+            .map_or(false, |ns| ns != Namespace::Html)
     }
 
     fn process_in_table_start_tag(&mut self, name: &str, attrs: HashMap<String, String>, self_closing: bool) {
