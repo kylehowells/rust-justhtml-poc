@@ -1609,7 +1609,15 @@ impl TreeBuilder {
             }
             "caption" | "col" | "colgroup" | "frame" | "head" |
             "tbody" | "td" | "tfoot" | "th" | "thead" | "tr" => {
-                self.error("unexpected-table-element-in-body");
+                // In foreign content, these should be created with the foreign namespace
+                if self.is_in_foreign_content() {
+                    self.insert_element(name, attrs);
+                    if self_closing {
+                        self.pop_and_add_to_parent();
+                    }
+                } else {
+                    self.error("unexpected-table-element-in-body");
+                }
             }
             _ => {
                 self.reconstruct_active_formatting_elements();
@@ -1785,8 +1793,26 @@ impl TreeBuilder {
             "script" | "template" => {
                 self.process_in_head_start_tag(name, attrs, self_closing);
             }
-            _ => {
+            "math" => {
+                // Math elements should be inserted with MathML namespace
                 self.error("unexpected-element-in-select");
+                let mut element = Node::element_ns(name, Namespace::MathML, attrs);
+                self.open_elements.push(element);
+            }
+            "svg" => {
+                // SVG elements should be inserted with SVG namespace
+                self.error("unexpected-element-in-select");
+                let mut element = Node::element_ns(name, Namespace::Svg, attrs);
+                self.open_elements.push(element);
+            }
+            _ => {
+                // Per spec, other elements are parse errors but should still be inserted
+                self.error("unexpected-element-in-select");
+                // Insert the element anyway (this matches browser behavior)
+                self.insert_html_element(name, attrs);
+                if self_closing || VOID_ELEMENTS.contains(name) {
+                    self.pop_and_add_to_parent();
+                }
             }
         }
     }
