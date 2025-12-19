@@ -91,6 +91,8 @@ impl NodeInner {
 /// A DOM node with a simpler interface
 #[derive(Debug, Clone)]
 pub struct Node {
+    /// Unique node ID for identity tracking
+    pub id: u64,
     /// Node type/name
     pub name: String,
     /// Namespace
@@ -112,6 +114,14 @@ pub struct Node {
     pub foster_parented: bool,
 }
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn generate_node_id() -> u64 {
+    NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 impl Node {
     pub fn new(name: &str) -> Self {
         let namespace = if name.starts_with('#') || name == "!doctype" {
@@ -121,6 +131,7 @@ impl Node {
         };
 
         Self {
+            id: generate_node_id(),
             name: name.to_string(),
             namespace,
             children: Vec::new(),
@@ -140,6 +151,7 @@ impl Node {
         };
 
         Self {
+            id: generate_node_id(),
             name: name.to_string(),
             namespace: actual_namespace,
             children: Vec::new(),
@@ -179,6 +191,7 @@ impl Node {
 
     pub fn element(name: &str, attrs: HashMap<String, String>) -> Self {
         Self {
+            id: generate_node_id(),
             name: name.to_string(),
             namespace: Some(Namespace::Html),
             children: Vec::new(),
@@ -196,6 +209,7 @@ impl Node {
 
     pub fn element_ns(name: &str, namespace: Namespace, attrs: HashMap<String, String>) -> Self {
         Self {
+            id: generate_node_id(),
             name: name.to_string(),
             namespace: Some(namespace),
             children: Vec::new(),
@@ -289,6 +303,7 @@ impl Node {
     /// Clone the node (deep clone)
     pub fn clone_deep(&self) -> Self {
         let mut clone = Self {
+            id: generate_node_id(),
             name: self.name.clone(),
             namespace: self.namespace,
             children: Vec::new(),
@@ -312,6 +327,7 @@ pub fn handle_to_node(handle: &Handle) -> Node {
     let inner = handle.borrow();
 
     let mut node = Node {
+        id: generate_node_id(),
         name: inner.name.clone(),
         namespace: inner.namespace,
         children: Vec::new(),

@@ -288,15 +288,29 @@ impl TreeBuilder {
             return;
         }
 
-        // Try to append to existing text node
+        // Get target for insertion (template content if current is template)
         if let Some(current) = self.open_elements.last_mut() {
+            // If current is a template, insert into its content
+            if current.name == "template" {
+                if let Some(ref mut content) = current.template_content {
+                    // Try to append to existing text node
+                    if let Some(last_child) = content.children.last_mut() {
+                        if let Some(NodeData::Text(ref mut existing)) = last_child.data {
+                            existing.push(c);
+                            return;
+                        }
+                    }
+                    content.children.push(Node::text(&text));
+                    return;
+                }
+            }
+            // Normal case: insert into current element
             if let Some(last_child) = current.children.last_mut() {
                 if let Some(NodeData::Text(ref mut existing)) = last_child.data {
                     existing.push(c);
                     return;
                 }
             }
-            // Create new text node
             current.children.push(Node::text(&text));
         }
     }
@@ -323,6 +337,13 @@ impl TreeBuilder {
     fn insert_comment(&mut self, data: &str) {
         let comment = Node::comment(data);
         if let Some(current) = self.open_elements.last_mut() {
+            // If current is a template, insert into its content
+            if current.name == "template" {
+                if let Some(ref mut content) = current.template_content {
+                    content.children.push(comment);
+                    return;
+                }
+            }
             current.children.push(comment);
         } else {
             self.document.children.push(comment);
@@ -370,6 +391,13 @@ impl TreeBuilder {
             }
 
             if let Some(parent) = self.open_elements.last_mut() {
+                // If parent is a template, add to its content instead
+                if parent.name == "template" {
+                    if let Some(ref mut content) = parent.template_content {
+                        content.children.push(node);
+                        return;
+                    }
+                }
                 parent.children.push(node);
             } else {
                 self.document.children.push(node);
@@ -444,32 +472,53 @@ impl TreeBuilder {
     }
 
     fn reconstruct_active_formatting_elements(&mut self) {
-        // Simplified implementation - full adoption agency algorithm is complex
         if self.active_formatting_elements.is_empty() {
             return;
         }
 
-        // Find last marker or beginning
-        let mut entry_index = self.active_formatting_elements.len();
-        for (i, entry) in self.active_formatting_elements.iter().enumerate().rev() {
-            if entry.is_none() {
-                entry_index = i + 1;
+        // Check if last entry is a marker or already in open elements
+        if let Some(last) = self.active_formatting_elements.last() {
+            if last.is_none() {
+                return;
+            }
+            if let Some(ref node) = last {
+                if self.open_elements.iter().any(|n| n.id == node.id) {
+                    return;
+                }
+            }
+        }
+
+        // Step 4: Rewind - find where to start
+        let mut entry_index = self.active_formatting_elements.len() - 1;
+        loop {
+            if entry_index == 0 {
                 break;
             }
-            // Check if element is in open elements
+            entry_index -= 1;
+            let entry = &self.active_formatting_elements[entry_index];
+            if entry.is_none() {
+                entry_index += 1;
+                break;
+            }
             if let Some(ref node) = entry {
-                if self.open_elements.iter().any(|n| n.name == node.name) {
-                    entry_index = i + 1;
+                if self.open_elements.iter().any(|n| n.id == node.id) {
+                    entry_index += 1;
                     break;
                 }
             }
         }
 
-        // Reconstruct from entry_index
+        // Step 7: Advance and create elements
         while entry_index < self.active_formatting_elements.len() {
-            if let Some(Some(ref entry)) = self.active_formatting_elements.get(entry_index) {
-                let element = Node::element(&entry.name, entry.attrs.clone());
-                self.open_elements.push(element);
+            let entry_clone = self.active_formatting_elements[entry_index].clone();
+            if let Some(entry) = entry_clone {
+                let new_element = Node::element(&entry.name, entry.attrs.clone());
+                let new_id = new_element.id;
+                self.open_elements.push(new_element);
+                // Update the entry in active_formatting to have matching ID
+                if let Some(ref mut active_entry) = self.active_formatting_elements[entry_index] {
+                    active_entry.id = new_id;
+                }
             }
             entry_index += 1;
         }
@@ -484,7 +533,30 @@ impl TreeBuilder {
     }
 
     fn push_active_formatting_element(&mut self, name: &str, attrs: HashMap<String, String>) {
-        let element = Node::element(name, attrs);
+        // Noah's Ark clause: if there are already 3 matching elements after the last marker,
+        // remove the earliest one
+        let mut matching_count = 0;
+        let mut earliest_match_idx: Option<usize> = None;
+        for (i, entry) in self.active_formatting_elements.iter().enumerate().rev() {
+            match entry {
+                None => break, // Hit marker
+                Some(node) if node.name == name && node.attrs == attrs => {
+                    matching_count += 1;
+                    earliest_match_idx = Some(i);
+                }
+                _ => {}
+            }
+        }
+        if matching_count >= 3 {
+            if let Some(idx) = earliest_match_idx {
+                self.active_formatting_elements.remove(idx);
+            }
+        }
+
+        // Get the ID from the element we just pushed to open_elements
+        let id = self.open_elements.last().map(|n| n.id).unwrap_or(0);
+        let mut element = Node::element(name, attrs);
+        element.id = id;
         self.active_formatting_elements.push(Some(element));
     }
 
@@ -513,7 +585,7 @@ impl TreeBuilder {
         }
 
         // Step 2: Outer loop (max 8 iterations)
-        for _ in 0..8 {
+        for _outer in 0..8 {
             // Step 3: Find formatting element in active formatting list
             let mut fe_active_idx: Option<usize> = None;
             for i in (0..self.active_formatting_elements.len()).rev() {
@@ -527,16 +599,17 @@ impl TreeBuilder {
                 }
             }
 
-            let Some(fe_active_idx) = fe_active_idx else {
+            let Some(mut fe_active_idx) = fe_active_idx else {
                 // No formatting element found - use any other end tag handling
                 self.any_other_end_tag(name);
                 return;
             };
 
-            // Step 4: Find formatting element in open elements
-            let fe_stack_idx = self.open_elements.iter().rposition(|n| n.name == name);
+            // Step 4: Find formatting element in open elements by ID
+            let fe_id = self.active_formatting_elements[fe_active_idx].as_ref().map(|n| n.id).unwrap_or(0);
+            let fe_stack_idx = self.open_elements.iter().position(|n| n.id == fe_id);
 
-            let Some(fe_stack_idx) = fe_stack_idx else {
+            let Some(mut fe_stack_idx) = fe_stack_idx else {
                 // Formatting element not in open elements - remove from active formatting
                 self.error("adoption-agency-1.3");
                 self.active_formatting_elements.remove(fe_active_idx);
@@ -564,7 +637,7 @@ impl TreeBuilder {
             }
 
             // Step 8: If no furthest block, pop to formatting element and remove from active formatting
-            let Some(_fb_idx) = furthest_block_idx else {
+            let Some(mut fb_idx) = furthest_block_idx else {
                 while self.open_elements.len() > fe_stack_idx {
                     self.pop_and_add_to_parent();
                 }
@@ -572,16 +645,182 @@ impl TreeBuilder {
                 return;
             };
 
-            // For the complex case with furthest block, we use a simplified approach:
-            // Just pop elements and remove from active formatting.
-            // This doesn't produce perfect output for complex adoption agency cases,
-            // but handles the common cases.
-            self.generate_implied_end_tags();
-            while self.open_elements.len() > fe_stack_idx {
-                self.pop_and_add_to_parent();
+            // Step 9: Common ancestor is element above formatting element
+            let common_ancestor_idx = fe_stack_idx - 1;
+
+            // Step 10: bookmark
+            let mut bookmark = fe_active_idx;
+
+            // Step 11: node and last_node start at furthest block
+            let mut node_idx = fb_idx;
+            let mut last_node_idx = fb_idx;
+
+            // Track the ID of the furthest block for later
+            let fb_id = self.open_elements[fb_idx].id;
+
+            // Step 12: Inner loop
+            let mut inner_counter = 0;
+            loop {
+                inner_counter += 1;
+
+                // Step 12.1: Move up to previous node
+                if node_idx == 0 || node_idx <= fe_stack_idx {
+                    break;
+                }
+                node_idx -= 1;
+
+                // Step 12.2: If we've reached formatting element, break
+                if node_idx == fe_stack_idx {
+                    break;
+                }
+
+                // Bounds check
+                if node_idx >= self.open_elements.len() {
+                    break;
+                }
+
+                // Step 12.3: Get node's ID
+                let node_id = self.open_elements[node_idx].id;
+
+                // Step 12.4: Find node in active formatting
+                let node_in_active = self.active_formatting_elements.iter()
+                    .position(|e| e.as_ref().map_or(false, |n| n.id == node_id));
+
+                // Step 12.5: If inner > 3 and in active formatting, remove from active formatting
+                if inner_counter > 3 {
+                    if let Some(idx) = node_in_active {
+                        self.active_formatting_elements.remove(idx);
+                        if idx < fe_active_idx {
+                            fe_active_idx -= 1;
+                        }
+                        if idx <= bookmark {
+                            bookmark = bookmark.saturating_sub(1);
+                        }
+                    }
+                }
+
+                // Step 12.6: If not in active formatting, remove from stack
+                let Some(node_active_idx) = node_in_active else {
+                    // Remove from stack
+                    let removed = self.open_elements.remove(node_idx);
+                    // Update indices
+                    fe_stack_idx -= 1;
+                    if fb_idx > node_idx { fb_idx -= 1; }
+                    if last_node_idx > node_idx { last_node_idx -= 1; }
+                    continue;
+                };
+
+                // Step 12.7: Create new element with same tag/attrs
+                let node_name = self.open_elements[node_idx].name.clone();
+                let node_attrs = self.open_elements[node_idx].attrs.clone();
+                let mut new_node = Node::element(&node_name, node_attrs);
+                let new_node_id = new_node.id;
+
+                // Update in active formatting
+                if let Some(ref mut entry) = self.active_formatting_elements[node_active_idx] {
+                    entry.id = new_node_id;
+                }
+
+                // Replace in open elements
+                self.open_elements[node_idx] = new_node;
+
+                // Step 12.8: If last_node is furthest block, move bookmark after node
+                if last_node_idx == fb_idx {
+                    bookmark = node_active_idx + 1;
+                }
+
+                // Step 12.9: Move last_node to be child of node
+                if last_node_idx != node_idx {
+                    let last_node = self.open_elements.remove(last_node_idx);
+                    self.open_elements[node_idx].children.push(last_node);
+                    // Update indices after removal
+                    if fb_idx > last_node_idx { fb_idx -= 1; }
+                    fe_stack_idx -= 1;
+                }
+
+                // Step 12.10: last_node = node
+                last_node_idx = node_idx;
             }
-            self.active_formatting_elements.remove(fe_active_idx);
-            return;
+
+            // Re-find formatting element after inner loop
+            let fe_stack_idx = self.open_elements.iter().position(|n| n.id == fe_id);
+            let Some(fe_stack_idx) = fe_stack_idx else {
+                // Formatting element no longer on stack, bail out
+                self.active_formatting_elements.remove(fe_active_idx);
+                return;
+            };
+
+            // Re-calculate common_ancestor_idx
+            if fe_stack_idx == 0 {
+                self.active_formatting_elements.remove(fe_active_idx);
+                return;
+            }
+            let common_ancestor_idx = fe_stack_idx - 1;
+
+            // Step 13: Insert last_node into appropriate place in common ancestor
+            // For simplicity in stack-based model: we'll add to children of common ancestor
+            // and remove from current position
+            if last_node_idx < self.open_elements.len() && last_node_idx > fe_stack_idx {
+                let last_node = self.open_elements.remove(last_node_idx);
+                // Bounds check before accessing common_ancestor
+                if common_ancestor_idx < self.open_elements.len() {
+                    self.open_elements[common_ancestor_idx].children.push(last_node);
+                }
+            }
+
+            // Re-find fe_stack_idx again after potential removal
+            let fe_stack_idx = self.open_elements.iter().position(|n| n.id == fe_id);
+            let Some(fe_stack_idx) = fe_stack_idx else {
+                self.active_formatting_elements.remove(fe_active_idx);
+                return;
+            };
+
+            // Step 14: Create new formatting element
+            let fe_name = self.open_elements[fe_stack_idx].name.clone();
+            let fe_attrs = self.open_elements[fe_stack_idx].attrs.clone();
+
+            // Step 15: Move all children of furthest_block (now in common_ancestor.children)
+            // Find the furthest block in common_ancestor's children
+            let fb_in_ca = self.open_elements[common_ancestor_idx].children.iter()
+                .position(|c| c.id == fb_id);
+
+            if let Some(fb_child_idx) = fb_in_ca {
+                // Take children from furthest block
+                let fb_children = std::mem::take(&mut self.open_elements[common_ancestor_idx].children[fb_child_idx].children);
+
+                // Create new formatting element with those children
+                let mut new_fe = Node::element(&fe_name, fe_attrs.clone());
+                let new_fe_id = new_fe.id;
+                new_fe.children = fb_children;
+
+                // Add new formatting element to furthest block
+                self.open_elements[common_ancestor_idx].children[fb_child_idx].children.push(new_fe);
+
+                // Step 16: Update active formatting list
+                self.active_formatting_elements.remove(fe_active_idx);
+                let bookmark = bookmark.min(self.active_formatting_elements.len());
+                let mut new_entry = Node::element(&fe_name, fe_attrs.clone());
+                new_entry.id = new_fe_id;
+                self.active_formatting_elements.insert(bookmark, Some(new_entry));
+
+                // Step 17: Remove formatting element from stack
+                // and add new one after furthest block
+                self.open_elements.remove(fe_stack_idx);
+
+                // Since we moved furthest_block to common_ancestor.children,
+                // we need to push the new formatting element to open_elements
+                // so it can receive future content
+                let mut new_stack_fe = Node::element(&fe_name, fe_attrs);
+                new_stack_fe.id = new_fe_id;
+                // Insert after common_ancestor
+                self.open_elements.insert(common_ancestor_idx + 1, new_stack_fe);
+            } else {
+                // Furthest block not found in expected location, fall back to simple close
+                self.active_formatting_elements.remove(fe_active_idx);
+                while self.open_elements.len() > fe_stack_idx {
+                    self.pop_and_add_to_parent();
+                }
+            }
         }
     }
 
