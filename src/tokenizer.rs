@@ -159,6 +159,9 @@ pub struct Tokenizer<'a> {
     // Character reference state
     char_ref_code: u32,
 
+    // Track if last consume was EOF (for proper reconsume behavior)
+    last_was_eof: bool,
+
     // Error collection
     pub errors: Vec<ParseError>,
 }
@@ -191,6 +194,7 @@ impl<'a> Tokenizer<'a> {
             temp_buffer: String::new(),
             last_start_tag_name: String::new(),
             char_ref_code: 0,
+            last_was_eof: false,
             errors: Vec::new(),
         }
     }
@@ -221,8 +225,10 @@ impl<'a> Tokenizer<'a> {
         if self.pos < self.input.len() {
             let c = self.input[self.pos];
             self.pos += 1;
+            self.last_was_eof = false;
             Some(c)
         } else {
+            self.last_was_eof = true;
             None
         }
     }
@@ -236,7 +242,9 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn reconsume(&mut self) {
-        if self.pos > 0 {
+        // Only decrement if the last consume wasn't EOF
+        // (EOF doesn't advance pos, so reconsuming EOF shouldn't decrement)
+        if !self.last_was_eof && self.pos > 0 {
             self.pos -= 1;
         }
     }

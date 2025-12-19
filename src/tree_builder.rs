@@ -219,7 +219,14 @@ impl TreeBuilder {
             .and_then(|n| n.namespace)
             .unwrap_or(Namespace::Html);
 
-        let element = Node::element_ns(name, namespace, attrs);
+        // Apply SVG element name adjustments
+        let adjusted_name = if namespace == Namespace::Svg {
+            SVG_ELEMENT_ADJUSTMENTS.get(name).copied().unwrap_or(name)
+        } else {
+            name
+        };
+
+        let element = Node::element_ns(adjusted_name, namespace, attrs);
         self.open_elements.push(element);
     }
 
