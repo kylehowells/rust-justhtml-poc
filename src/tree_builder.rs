@@ -1568,6 +1568,8 @@ impl TreeBuilder {
             InsertionMode::BeforeHtml => {
                 match name {
                     "head" | "body" | "html" | "br" => {
+                        // Record where html should be inserted (after doctype/pre-html content)
+                        self.html_insert_index = self.document.children.len();
                         self.insert_html_element("html", HashMap::new());
                         self.insertion_mode = InsertionMode::BeforeHead;
                         self.process_end_tag(name);
