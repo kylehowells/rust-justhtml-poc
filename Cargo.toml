@@ -1,0 +1,18 @@
+[package]
+name = "justhtml"
+version = "0.1.0"
+edition = "2021"
+description = "A pure Rust HTML5 parser following the WHATWG specification"
+license = "MIT"
+
+[dependencies]
+# No external dependencies - pure Rust implementation
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+glob = "0.3"
+
+[[bin]]
+name = "run_tests"
+path = "src/bin/run_tests.rs"
