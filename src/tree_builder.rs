@@ -1535,7 +1535,7 @@ impl TreeBuilder {
                 self.pop_elements_until("select");
                 self.reset_insertion_mode();
             }
-            "input" | "textarea" => {
+            "input" | "keygen" | "textarea" => {
                 self.error("unexpected-input-in-select");
                 if self.has_element_in_select_scope("select") {
                     self.pop_elements_until("select");
