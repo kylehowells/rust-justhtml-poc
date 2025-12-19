@@ -1338,6 +1338,47 @@ impl TreeBuilder {
             .map_or(false, |ns| ns != Namespace::Html)
     }
 
+    /// Process an end tag while in foreign content per WHATWG spec.
+    /// Returns true if fully handled (don't continue to normal processing),
+    /// false if we should fall through to HTML processing.
+    fn process_end_tag_in_foreign_content(&mut self, name: &str) -> bool {
+        let name_lower = name.to_ascii_lowercase();
+
+        // Step 1: If the current node's tag name (case-insensitively) matches, pop it
+        if let Some(current) = self.current_node() {
+            if current.name.to_ascii_lowercase() == name_lower {
+                self.pop_and_add_to_parent();
+                return true;
+            }
+        }
+
+        // Step 2: Loop through the stack backwards
+        // Find either a matching element to pop, or an HTML element to break out to
+        for i in (0..self.open_elements.len()).rev() {
+            let node = &self.open_elements[i];
+
+            // If we hit an HTML namespace element, break out to normal processing
+            if node.namespace == Some(Namespace::Html) {
+                // Pop all elements after this one (the foreign content elements)
+                while self.open_elements.len() > i + 1 {
+                    self.pop_and_add_to_parent();
+                }
+                return false; // Process using normal HTML rules
+            }
+
+            // If tag name matches, pop elements up to and including this one
+            if node.name.to_ascii_lowercase() == name_lower {
+                while self.open_elements.len() > i {
+                    self.pop_and_add_to_parent();
+                }
+                return true;
+            }
+        }
+
+        // No match found, but also no HTML element - just continue
+        false
+    }
+
     fn process_in_table_start_tag(&mut self, name: &str, attrs: HashMap<String, String>, self_closing: bool) {
         match name {
             "caption" => {
@@ -1457,6 +1498,13 @@ impl TreeBuilder {
     }
 
     fn process_end_tag(&mut self, name: &str) {
+        // Check for foreign content handling first
+        if self.is_in_foreign_content() {
+            if self.process_end_tag_in_foreign_content(name) {
+                return;
+            }
+        }
+
         match self.insertion_mode {
             InsertionMode::Initial => {
                 self.insertion_mode = InsertionMode::BeforeHtml;
