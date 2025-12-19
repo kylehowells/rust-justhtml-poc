@@ -645,9 +645,23 @@ impl TreeBuilder {
                     "base" | "basefont" | "bgsound" | "link" | "meta" |
                     "noframes" | "script" | "style" | "template" | "title" => {
                         self.error("unexpected-start-tag-after-head");
-                        self.insertion_mode = InsertionMode::InHead;
-                        self.process_start_tag(name, attrs, self_closing);
-                        self.insertion_mode = InsertionMode::AfterHead;
+                        // Push head back onto stack temporarily
+                        if let Some(html) = self.open_elements.first_mut() {
+                            if let Some(head_idx) = html.children.iter().position(|c| c.name == "head") {
+                                let head = html.children.remove(head_idx);
+                                self.open_elements.push(head);
+                                self.insertion_mode = InsertionMode::InHead;
+                                self.process_start_tag(name, attrs, self_closing);
+                                // Pop head and add back to html
+                                if let Some(head) = self.open_elements.pop() {
+                                    if let Some(html) = self.open_elements.first_mut() {
+                                        // Insert at original position
+                                        html.children.insert(head_idx, head);
+                                    }
+                                }
+                                self.insertion_mode = InsertionMode::AfterHead;
+                            }
+                        }
                     }
                     "head" => {
                         self.error("unexpected-start-tag-after-head");
