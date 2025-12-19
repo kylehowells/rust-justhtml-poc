@@ -303,6 +303,10 @@ impl TreeBuilder {
 
     fn pop_and_add_to_parent(&mut self) {
         if let Some(node) = self.open_elements.pop() {
+            // Skip adding to parent if already parented (e.g., elements inserted during head reinsertion)
+            if node.is_parented {
+                return;
+            }
             if let Some(parent) = self.open_elements.last_mut() {
                 parent.children.push(node);
             } else {
@@ -660,21 +664,46 @@ impl TreeBuilder {
                     "base" | "basefont" | "bgsound" | "link" | "meta" |
                     "noframes" | "script" | "style" | "template" | "title" => {
                         self.error("unexpected-start-tag-after-head");
-                        // Push head back onto stack temporarily
+                        // Push head back onto stack temporarily (per WHATWG spec)
                         if let Some(html) = self.open_elements.first_mut() {
                             if let Some(head_idx) = html.children.iter().position(|c| c.name == "head") {
                                 let head = html.children.remove(head_idx);
                                 self.open_elements.push(head);
                                 self.insertion_mode = InsertionMode::InHead;
                                 self.process_start_tag(name, attrs, self_closing);
-                                // Pop head and add back to html
-                                if let Some(head) = self.open_elements.pop() {
+
+                                // Remove head from stack (it might not be at the top)
+                                // Elements inserted after head need to be recorded as children of head
+                                if let Some(head_pos) = self.open_elements.iter().position(|n| n.name == "head") {
+                                    // Remove head and elements after it
+                                    let mut removed: Vec<Node> = self.open_elements.drain(head_pos..).collect();
+
+                                    // First element is head, rest are elements inserted after head
+                                    let mut head = removed.remove(0);
+                                    let mut elements_after: Vec<Node> = removed;
+
+                                    // Add elements as children of head and mark them as parented
+                                    for elem in &elements_after {
+                                        let mut child = elem.clone();
+                                        child.is_parented = true;
+                                        head.children.push(child);
+                                    }
+
+                                    // Put head back in html.children
                                     if let Some(html) = self.open_elements.first_mut() {
-                                        // Insert at original position
                                         html.children.insert(head_idx, head);
                                     }
+
+                                    // Put elements back on the stack (they're still open)
+                                    // Mark them as already parented so pop_and_add_to_parent skips them
+                                    for elem in &mut elements_after {
+                                        elem.is_parented = true;
+                                    }
+                                    for elem in elements_after {
+                                        self.open_elements.push(elem);
+                                    }
                                 }
-                                self.insertion_mode = InsertionMode::AfterHead;
+                                // Don't change insertion mode - it was set during process_start_tag
                             }
                         }
                     }
@@ -2160,7 +2189,11 @@ impl TreeBuilder {
                 self.process_eof();
             }
             InsertionMode::InHead | InsertionMode::InHeadNoscript => {
-                self.pop_and_add_to_parent();
+                // Only pop if head is actually on the stack
+                // (It might have been removed during AfterHead->InHead head reinsertion)
+                if self.current_node().map_or(false, |n| n.name == "head") {
+                    self.pop_and_add_to_parent();
+                }
                 self.insertion_mode = InsertionMode::AfterHead;
                 self.process_eof();
             }

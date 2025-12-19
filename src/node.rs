@@ -103,6 +103,10 @@ pub struct Node {
     pub data: Option<NodeData>,
     /// Template content
     pub template_content: Option<Box<Node>>,
+    /// Flag to track if this node is already a child of another node
+    /// Used for cases where elements need to be on the stack but are already parented
+    #[doc(hidden)]
+    pub is_parented: bool,
 }
 
 impl Node {
@@ -120,6 +124,7 @@ impl Node {
             attrs: HashMap::new(),
             data: None,
             template_content: None,
+            is_parented: false,
         }
     }
 
@@ -137,6 +142,7 @@ impl Node {
             attrs: HashMap::new(),
             data: None,
             template_content: None,
+            is_parented: false,
         }
     }
 
@@ -178,6 +184,7 @@ impl Node {
             } else {
                 None
             },
+            is_parented: false,
         }
     }
 
@@ -193,6 +200,7 @@ impl Node {
             } else {
                 None
             },
+            is_parented: false,
         }
     }
 
@@ -280,6 +288,7 @@ impl Node {
             attrs: self.attrs.clone(),
             data: self.data.clone(),
             template_content: self.template_content.as_ref().map(|t| Box::new(t.clone_deep())),
+            is_parented: self.is_parented,
         };
 
         for child in &self.children {
@@ -301,6 +310,7 @@ pub fn handle_to_node(handle: &Handle) -> Node {
         attrs: inner.attrs.clone(),
         data: inner.data.clone(),
         template_content: None,
+        is_parented: false,
     };
 
     // Convert children
