@@ -669,6 +669,11 @@ impl TreeBuilder {
                             if let Some(head_idx) = html.children.iter().position(|c| c.name == "head") {
                                 let head = html.children.remove(head_idx);
                                 self.open_elements.push(head);
+
+                                // Save original_insertion_mode so Text mode returns to AfterHead
+                                let saved_original_mode = self.original_insertion_mode;
+                                self.original_insertion_mode = InsertionMode::AfterHead;
+
                                 self.insertion_mode = InsertionMode::InHead;
                                 self.process_start_tag(name, attrs, self_closing);
 
@@ -703,7 +708,7 @@ impl TreeBuilder {
                                         self.open_elements.push(elem);
                                     }
                                 }
-                                // Don't change insertion mode - it was set during process_start_tag
+                                // Don't restore original_insertion_mode - we want Text to return to AfterHead
                             }
                         }
                     }
