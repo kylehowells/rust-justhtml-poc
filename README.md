@@ -72,7 +72,7 @@ Full benchmark details: [BENCHMARK_RESULTS.md](./BENCHMARK_RESULTS.md) | [MEMORY
 
 ## Test Compliance
 
-This implementation passes all 1,735 html5lib tree construction tests, ensuring spec-compliant HTML5 parsing.
+This implementation passes all 1,831 html5lib tree construction tests (matching Swift's complete test coverage), ensuring spec-compliant HTML5 parsing.
 
 ## License
 
