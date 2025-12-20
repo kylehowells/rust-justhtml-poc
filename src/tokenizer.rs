@@ -480,7 +480,8 @@ impl<'a> Tokenizer<'a> {
             }
             Some('\0') => {
                 self.error("unexpected-null-character");
-                self.emit_char('\u{FFFD}');
+                // Per spec: emit the null character as-is; the tree builder handles it
+                self.emit_char('\0');
             }
             Some(c) => {
                 self.emit_char(c);

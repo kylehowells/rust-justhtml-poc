@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use justhtml::{JustHTML, FragmentContext};
+use justhtml::{JustHTML, FragmentContext, Namespace};
 use justhtml::serialize::to_test_format;
 
 struct TestCase {
@@ -12,6 +12,73 @@ struct TestCase {
     expected: String,
     fragment_context: Option<String>,
     scripting: bool,
+}
+
+/// Unescape \xNN, \n, and \u{NNNN} sequences in test data
+fn unescape(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some('x') => {
+                    chars.next(); // consume 'x'
+                    let mut hex = String::new();
+                    if let Some(h1) = chars.next() {
+                        hex.push(h1);
+                    }
+                    if let Some(h2) = chars.next() {
+                        hex.push(h2);
+                    }
+                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                        result.push(byte as char);
+                    } else {
+                        result.push('\\');
+                        result.push('x');
+                        result.push_str(&hex);
+                    }
+                }
+                Some('u') => {
+                    chars.next(); // consume 'u'
+                    if chars.peek() == Some(&'{') {
+                        chars.next(); // consume '{'
+                        let mut hex = String::new();
+                        while let Some(&ch) = chars.peek() {
+                            if ch == '}' {
+                                chars.next(); // consume '}'
+                                break;
+                            }
+                            hex.push(ch);
+                            chars.next();
+                        }
+                        if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                            if let Some(ch) = char::from_u32(code) {
+                                result.push(ch);
+                            }
+                        }
+                    } else {
+                        result.push('\\');
+                        result.push('u');
+                    }
+                }
+                Some('n') => {
+                    chars.next();
+                    result.push('\n');
+                }
+                Some('\\') => {
+                    chars.next();
+                    result.push('\\');
+                }
+                _ => {
+                    result.push(c);
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 fn parse_test_file(content: &str) -> Vec<TestCase> {
@@ -42,7 +109,8 @@ fn parse_test_file(content: &str) -> Vec<TestCase> {
             data_lines.push(lines[i]);
             i += 1;
         }
-        let data = data_lines.join("\n");
+        // Apply unescape to handle \xNN and \n sequences
+        let data = unescape(&data_lines.join("\n"));
 
         // Skip #errors section
         if i < lines.len() && lines[i] == "#errors" {
@@ -87,13 +155,19 @@ fn parse_test_file(content: &str) -> Vec<TestCase> {
         }
         i += 1;
 
-        // Collect expected output
+        // Collect expected output - continue until we hit a #section marker
+        // Empty lines are valid inside quoted text nodes
         let mut expected_lines = Vec::new();
-        while i < lines.len() && !lines[i].is_empty() && !lines[i].starts_with('#') {
+        while i < lines.len() && !lines[i].starts_with('#') {
             expected_lines.push(lines[i]);
             i += 1;
         }
-        let expected = expected_lines.join("\n");
+        // Remove trailing empty lines (but not internal ones)
+        while expected_lines.last().map_or(false, |l| l.is_empty()) {
+            expected_lines.pop();
+        }
+        // Apply unescape to handle \xNN and \n sequences in expected output
+        let expected = unescape(&expected_lines.join("\n"));
 
         tests.push(TestCase {
             data,
@@ -108,7 +182,14 @@ fn parse_test_file(content: &str) -> Vec<TestCase> {
 
 fn run_test(test: &TestCase) -> (bool, String, String) {
     let doc = if let Some(ref context) = test.fragment_context {
-        let ctx = FragmentContext::new(context);
+        // Parse context like "svg path" or "math ms"
+        let ctx = if context.starts_with("svg ") {
+            FragmentContext::with_namespace(&context[4..], Namespace::Svg)
+        } else if context.starts_with("math ") {
+            FragmentContext::with_namespace(&context[5..], Namespace::MathML)
+        } else {
+            FragmentContext::new(context)
+        };
         JustHTML::parse_fragment(&test.data, ctx)
     } else {
         JustHTML::parse(&test.data)

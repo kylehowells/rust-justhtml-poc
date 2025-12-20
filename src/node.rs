@@ -112,13 +112,21 @@ pub struct Node {
     /// Flag to track if this element was inserted via foster parenting
     #[doc(hidden)]
     pub foster_parented: bool,
+    /// For adoption agency: the ID of the "real" node in the DOM tree
+    /// When content is added to this placeholder, it should go to the real node
+    #[doc(hidden)]
+    pub real_node_id: Option<u64>,
+    /// For block elements inserted inside a formatting element's DOM during foster parenting:
+    /// tracks which formatting element IDs are DOM ancestors of this block
+    #[doc(hidden)]
+    pub formatting_ancestor_ids: Vec<u64>,
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_NODE_ID: AtomicU64 = AtomicU64::new(1);
 
-fn generate_node_id() -> u64 {
+pub fn generate_node_id() -> u64 {
     NEXT_NODE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -140,6 +148,8 @@ impl Node {
             template_content: None,
             is_parented: false,
             foster_parented: false,
+            real_node_id: None,
+            formatting_ancestor_ids: Vec::new(),
         }
     }
 
@@ -160,6 +170,8 @@ impl Node {
             template_content: None,
             is_parented: false,
             foster_parented: false,
+            real_node_id: None,
+            formatting_ancestor_ids: Vec::new(),
         }
     }
 
@@ -204,6 +216,8 @@ impl Node {
             },
             is_parented: false,
             foster_parented: false,
+            real_node_id: None,
+            formatting_ancestor_ids: Vec::new(),
         }
     }
 
@@ -222,6 +236,8 @@ impl Node {
             },
             is_parented: false,
             foster_parented: false,
+            real_node_id: None,
+            formatting_ancestor_ids: Vec::new(),
         }
     }
 
@@ -312,6 +328,8 @@ impl Node {
             template_content: self.template_content.as_ref().map(|t| Box::new(t.clone_deep())),
             is_parented: self.is_parented,
             foster_parented: self.foster_parented,
+            real_node_id: self.real_node_id,
+            formatting_ancestor_ids: self.formatting_ancestor_ids.clone(),
         };
 
         for child in &self.children {
@@ -319,6 +337,24 @@ impl Node {
         }
 
         clone
+    }
+
+    /// Find a node by ID in this subtree (returns mutable reference)
+    pub fn find_by_id_mut(&mut self, target_id: u64) -> Option<&mut Node> {
+        if self.id == target_id {
+            return Some(self);
+        }
+        for child in &mut self.children {
+            if let Some(found) = child.find_by_id_mut(target_id) {
+                return Some(found);
+            }
+        }
+        if let Some(ref mut content) = self.template_content {
+            if let Some(found) = content.find_by_id_mut(target_id) {
+                return Some(found);
+            }
+        }
+        None
     }
 }
 
@@ -336,6 +372,8 @@ pub fn handle_to_node(handle: &Handle) -> Node {
         template_content: None,
         is_parented: false,
         foster_parented: false,
+        real_node_id: None,
+        formatting_ancestor_ids: Vec::new(),
     };
 
     // Convert children

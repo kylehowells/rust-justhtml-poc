@@ -74,14 +74,20 @@ impl JustHTML {
         );
 
         // Determine initial tokenizer state based on fragment context (per WHATWG spec)
+        // Only use special states for HTML namespace elements
         let initial_state = if let Some(ref ctx) = options.fragment_context {
-            match ctx.tag_name.as_str() {
-                "title" | "textarea" => TokenizerState::Rcdata,
-                "style" | "xmp" | "iframe" | "noembed" | "noframes" => TokenizerState::Rawtext,
-                "script" => TokenizerState::ScriptData,
-                "noscript" if options.scripting => TokenizerState::Rawtext,
-                "plaintext" => TokenizerState::Plaintext,
-                _ => TokenizerState::Data,
+            // SVG/MathML elements use Data state (they're HTML integration points or foreign)
+            if ctx.namespace.is_some() {
+                TokenizerState::Data
+            } else {
+                match ctx.tag_name.as_str() {
+                    "title" | "textarea" => TokenizerState::Rcdata,
+                    "style" | "xmp" | "iframe" | "noembed" | "noframes" => TokenizerState::Rawtext,
+                    "script" => TokenizerState::ScriptData,
+                    "noscript" if options.scripting => TokenizerState::Rawtext,
+                    "plaintext" => TokenizerState::Plaintext,
+                    _ => TokenizerState::Data,
+                }
             }
         } else {
             TokenizerState::Data

@@ -194,13 +194,43 @@ fn serialize_test_format(node: &Node, output: &mut String, depth: usize) {
             output.push_str(tag_name);
             output.push_str(">\n");
 
-            // Attributes (sorted)
-            let mut attrs: Vec<_> = node.attrs.iter().collect();
-            attrs.sort_by_key(|(k, _)| k.to_lowercase());
+            // Attributes (sorted case-sensitively as per html5lib test format)
+            // For foreign content, we need to sort by the OUTPUT key, not the input key
+            let is_foreign = node.namespace == Some(Namespace::Svg) ||
+                             node.namespace == Some(Namespace::MathML);
+
+            // Helper to get output key for foreign attributes
+            static XLINK_ATTRS: [&str; 7] = ["actuate", "arcrole", "href", "role", "show", "title", "type"];
+            static XML_ATTRS: [&str; 2] = ["lang", "space"];
+
+            let get_output_key = |key: &str| -> String {
+                if !is_foreign {
+                    return key.to_string();
+                }
+                if let Some(local) = key.strip_prefix("xlink:") {
+                    if XLINK_ATTRS.contains(&local) {
+                        return format!("xlink {}", local);
+                    }
+                } else if let Some(local) = key.strip_prefix("xml:") {
+                    if XML_ATTRS.contains(&local) {
+                        return format!("xml {}", local);
+                    }
+                } else if key == "xmlns:xlink" {
+                    return "xmlns xlink".to_string();
+                }
+                key.to_string()
+            };
+
+            // Collect and sort by output key
+            let mut attrs: Vec<_> = node.attrs.iter()
+                .map(|(k, v)| (get_output_key(k), v.as_str()))
+                .collect();
+            attrs.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+
             for (key, value) in attrs {
                 output.push_str(&indent);
                 output.push_str("  ");
-                output.push_str(key);
+                output.push_str(&key);
                 output.push_str("=\"");
                 output.push_str(value);
                 output.push_str("\"\n");
