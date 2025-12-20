@@ -49,6 +49,8 @@ pub struct ParseOptions {
     pub scripting: bool,
     /// Parse iframe srcdoc content
     pub iframe_srcdoc: bool,
+    /// Coerce output for XML compatibility
+    pub xml_coercion: bool,
 }
 
 /// Main entry point for HTML parsing
@@ -93,7 +95,7 @@ impl JustHTML {
             TokenizerState::Data
         };
 
-        let mut tokenizer = Tokenizer::with_options(&mut tree_builder, initial_state, options.scripting);
+        let mut tokenizer = Tokenizer::with_options(&mut tree_builder, initial_state, options.scripting, options.xml_coercion);
         tokenizer.run(html);
 
         let (root, errors) = tree_builder.finish();

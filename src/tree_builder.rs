@@ -1696,7 +1696,12 @@ impl TreeBuilder {
         match self.insertion_mode {
             InsertionMode::Initial => {
                 // Determine quirks mode based on doctype per WHATWG spec
-                self.quirks_mode = self.should_be_quirks_mode(&doctype);
+                // iframe_srcdoc always forces no-quirks mode (after force_quirks check)
+                self.quirks_mode = if self.iframe_srcdoc && !doctype.force_quirks {
+                    false
+                } else {
+                    self.should_be_quirks_mode(&doctype)
+                };
                 let node = Node::doctype(doctype);
                 self.document.children.push(node);
                 self.insertion_mode = InsertionMode::BeforeHtml;
@@ -3857,6 +3862,18 @@ impl TreeBuilder {
             InsertionMode::InBody => {
                 if c == '\0' {
                     self.error("unexpected-null-character");
+                    // In foreign content (SVG/MathML non-integration points), replace null with U+FFFD
+                    // In integration points (MathML text integration, HTML integration), null is dropped
+                    if self.is_in_foreign_content() {
+                        if let Some(current) = self.current_node() {
+                            let is_integration_point = self.is_mathml_text_integration_point(current) ||
+                                self.is_html_integration_point(current);
+                            if !is_integration_point {
+                                self.insert_character('\u{FFFD}');
+                            }
+                        }
+                    }
+                    // Otherwise, null is just dropped
                 } else if c == '\x0C' && self.is_in_foreign_content() {
                     // Form feed (U+000C) is not valid XML whitespace. In MathML/SVG contexts,
                     // it should be silently dropped per XML spec (only space, tab, LF, CR are valid).

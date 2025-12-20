@@ -41,6 +41,40 @@ fn preprocess_line_endings(html: &str) -> String {
     result
 }
 
+/// Coerce a character for XML compatibility
+/// - Form feed (0x0C) → space
+/// - Noncharacters (U+FDD0-U+FDEF, xFFFE, xFFFF) → replacement character
+fn coerce_char_for_xml(c: char) -> char {
+    let cp = c as u32;
+
+    // Form feed → space
+    if cp == 0x0C {
+        return ' ';
+    }
+
+    // Noncharacter range U+FDD0-U+FDEF
+    if cp >= 0xFDD0 && cp <= 0xFDEF {
+        return '\u{FFFD}';
+    }
+
+    // Noncharacters U+xFFFE and U+xFFFF on all planes
+    let low16 = cp & 0xFFFF;
+    if low16 == 0xFFFE || low16 == 0xFFFF {
+        return '\u{FFFD}';
+    }
+
+    c
+}
+
+/// Coerce comment text for XML compatibility
+/// - Double hyphens (--) → (- -)
+fn coerce_comment_for_xml(text: &str) -> String {
+    if !text.contains("--") {
+        return text.to_string();
+    }
+    text.replace("--", "- -")
+}
+
 /// Tokenizer states
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum State {
@@ -126,6 +160,7 @@ pub enum State {
 pub struct Tokenizer<'a> {
     sink: &'a mut dyn TokenSink,
     scripting: bool,
+    xml_coercion: bool,
 
     state: State,
     return_state: State,
@@ -168,13 +203,14 @@ pub struct Tokenizer<'a> {
 
 impl<'a> Tokenizer<'a> {
     pub fn new(sink: &'a mut dyn TokenSink) -> Self {
-        Self::with_options(sink, State::Data, false)
+        Self::with_options(sink, State::Data, false, false)
     }
 
-    pub fn with_options(sink: &'a mut dyn TokenSink, initial_state: State, scripting: bool) -> Self {
+    pub fn with_options(sink: &'a mut dyn TokenSink, initial_state: State, scripting: bool, xml_coercion: bool) -> Self {
         Self {
             sink,
             scripting,
+            xml_coercion,
             state: initial_state,
             return_state: State::Data,
             input: Vec::new(),
@@ -293,6 +329,11 @@ impl<'a> Tokenizer<'a> {
         if !self.char_buffer.is_empty() {
             let text = std::mem::take(&mut self.char_buffer);
             for c in text.chars() {
+                let c = if self.xml_coercion {
+                    coerce_char_for_xml(c)
+                } else {
+                    c
+                };
                 self.sink.process_token(Token::Character(c));
             }
         }
@@ -332,7 +373,12 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn emit_current_comment(&mut self) {
-        self.emit(Token::Comment(self.current_comment.clone()));
+        let comment = if self.xml_coercion {
+            coerce_comment_for_xml(&self.current_comment)
+        } else {
+            self.current_comment.clone()
+        };
+        self.emit(Token::Comment(comment));
         self.current_comment.clear();
     }
 

@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use justhtml::{JustHTML, FragmentContext, Namespace};
+use justhtml::{JustHTML, FragmentContext, Namespace, ParseOptions};
 use justhtml::serialize::to_test_format;
 
 struct TestCase {
@@ -12,6 +12,8 @@ struct TestCase {
     expected: String,
     fragment_context: Option<String>,
     scripting: bool,
+    iframe_srcdoc: bool,
+    xml_coercion: bool,
 }
 
 /// Unescape \xNN, \n, and \u{NNNN} sequences in test data
@@ -103,6 +105,31 @@ fn parse_test_file(content: &str) -> Vec<TestCase> {
         }
         i += 1;
 
+        // Initialize flags for this test
+        let mut scripting = false;
+        let mut iframe_srcdoc = false;
+        let mut xml_coercion = false;
+
+        // Check for directives that can appear right after #data
+        while i < lines.len() {
+            let line = lines[i];
+            if line == "#script-on" {
+                scripting = true;
+                i += 1;
+            } else if line == "#script-off" {
+                scripting = false;
+                i += 1;
+            } else if line == "#iframe-srcdoc" {
+                iframe_srcdoc = true;
+                i += 1;
+            } else if line == "#xml-coercion" {
+                xml_coercion = true;
+                i += 1;
+            } else {
+                break;
+            }
+        }
+
         // Collect data until next section
         let mut data_lines = Vec::new();
         while i < lines.len() && !lines[i].starts_with('#') {
@@ -112,31 +139,35 @@ fn parse_test_file(content: &str) -> Vec<TestCase> {
         // Apply unescape to handle \xNN and \n sequences
         let data = unescape(&data_lines.join("\n"));
 
-        // Skip #errors section
-        if i < lines.len() && lines[i] == "#errors" {
-            i += 1;
-            while i < lines.len() && !lines[i].starts_with('#') {
+        // Process remaining directives until #document
+        while i < lines.len() {
+            let line = lines[i];
+
+            if line == "#errors" || line == "#new-errors" {
+                i += 1;
+                while i < lines.len() && !lines[i].starts_with('#') {
+                    i += 1;
+                }
+            } else if line == "#script-on" {
+                scripting = true;
+                i += 1;
+            } else if line == "#script-off" {
+                scripting = false;
+                i += 1;
+            } else if line == "#iframe-srcdoc" {
+                iframe_srcdoc = true;
+                i += 1;
+            } else if line == "#xml-coercion" {
+                xml_coercion = true;
+                i += 1;
+            } else if line == "#document-fragment" {
+                // Handle fragment context below
+                break;
+            } else if line == "#document" {
+                break;
+            } else {
                 i += 1;
             }
-        }
-
-        // Check for #new-errors section
-        if i < lines.len() && lines[i] == "#new-errors" {
-            i += 1;
-            while i < lines.len() && !lines[i].starts_with('#') {
-                i += 1;
-            }
-        }
-
-        // Check for scripting flag
-        let mut scripting = false;
-        if i < lines.len() && lines[i] == "#script-on" {
-            scripting = true;
-            i += 1;
-        }
-        if i < lines.len() && lines[i] == "#script-off" {
-            scripting = false;
-            i += 1;
         }
 
         // Check for fragment context
@@ -174,6 +205,8 @@ fn parse_test_file(content: &str) -> Vec<TestCase> {
             expected,
             fragment_context,
             scripting,
+            iframe_srcdoc,
+            xml_coercion,
         });
     }
 
@@ -181,19 +214,25 @@ fn parse_test_file(content: &str) -> Vec<TestCase> {
 }
 
 fn run_test(test: &TestCase) -> (bool, String, String) {
-    let doc = if let Some(ref context) = test.fragment_context {
+    let fragment_context = test.fragment_context.as_ref().map(|context| {
         // Parse context like "svg path" or "math ms"
-        let ctx = if context.starts_with("svg ") {
+        if context.starts_with("svg ") {
             FragmentContext::with_namespace(&context[4..], Namespace::Svg)
         } else if context.starts_with("math ") {
             FragmentContext::with_namespace(&context[5..], Namespace::MathML)
         } else {
             FragmentContext::new(context)
-        };
-        JustHTML::parse_fragment(&test.data, ctx)
-    } else {
-        JustHTML::parse(&test.data)
+        }
+    });
+
+    let options = ParseOptions {
+        fragment_context,
+        scripting: test.scripting,
+        iframe_srcdoc: test.iframe_srcdoc,
+        xml_coercion: test.xml_coercion,
     };
+
+    let doc = JustHTML::parse_with_options(&test.data, options);
 
     let actual = to_test_format(&doc.root);
     let passed = actual.trim() == test.expected.trim();
@@ -235,11 +274,6 @@ fn main() {
         let file_path = entry.path();
         let file_name = file_path.file_name().unwrap().to_string_lossy();
 
-        // Skip unsafe tests
-        if file_name.contains("unsafe") {
-            continue;
-        }
-
         // Apply filter
         if let Some(f) = filter {
             if !file_name.contains(f) {
@@ -260,11 +294,6 @@ fn main() {
         let mut file_failed = 0;
 
         for (idx, test) in tests.iter().enumerate() {
-            // Skip scripting tests
-            if test.scripting {
-                continue;
-            }
-
             let (passed, actual, expected) = run_test(test);
 
             if passed {
@@ -279,6 +308,15 @@ fn main() {
                     println!("Input: {:?}", test.data);
                     if test.fragment_context.is_some() {
                         println!("Fragment context: {:?}", test.fragment_context);
+                    }
+                    if test.scripting {
+                        println!("Scripting: enabled");
+                    }
+                    if test.iframe_srcdoc {
+                        println!("iframe-srcdoc: true");
+                    }
+                    if test.xml_coercion {
+                        println!("xml-coercion: true");
                     }
                     println!("\nExpected:");
                     println!("{}", expected);
